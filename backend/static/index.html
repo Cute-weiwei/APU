@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>APU — APK Unpack Agents</title>
+  <link rel="stylesheet" href="/static/ui.css">
+</head>
+<body>
+  <div id="toast" class="toast hidden"></div>
+
+  <section id="login-view" class="login-wrap">
+    <form id="login-form" class="login-card">
+      <div class="brand">APU<span>APKUNPACK</span></div>
+      <p class="muted">账号密码登录 · Agent / OpenAI / Anthropic 三底座</p>
+      <label>用户名<input id="login-user" autocomplete="username" required></label>
+      <label>密码<input id="login-pass" type="password" autocomplete="current-password" required></label>
+      <button class="primary" type="submit">登录</button>
+      <p id="login-error" class="error"></p>
+    </form>
+  </section>
+
+  <div id="app-view" class="app hidden">
+    <header class="topbar">
+      <div class="brand">APU<span>APKUNPACK</span></div>
+      <nav class="tabs">
+        <button data-tab="jobs" class="tab active">任务</button>
+        <button data-tab="chat" class="tab">聊天</button>
+        <button data-tab="lessons" class="tab">经验库</button>
+        <button data-tab="admin" class="tab">管理</button>
+        <button data-tab="account" class="tab">账号</button>
+      </nav>
+      <div class="who">
+        <button id="lang-toggle" class="ghost" data-no-i18n title="Switch language">English</button>
+        <span id="who-name"></span>
+        <button id="logout" class="ghost">退出</button>
+      </div>
+    </header>
+
+    <main>
+      <section id="tab-jobs" class="tab-panel">
+        <div class="jobs-grid">
+          <div class="card upload-card">
+            <h2>上传 APK</h2>
+            <label id="dropzone" class="dropzone">
+              <input id="file" type="file" accept=".apk" hidden>
+              <strong id="file-label">点击选择或拖入 APK</strong>
+              <span class="muted" id="file-meta">仅支持单个 .apk 文件</span>
+            </label>
+            <p id="file-note" class="error small hidden" role="alert"></p>
+            <div class="progress hidden" id="upload-progress"><div id="upload-bar"></div></div>
+            <div class="row">
+              <label>Agent / 模型
+                <select id="engine">
+                  <option value="">加载中…</option>
+                </select>
+              </label>
+              <label>设备
+                <select id="serial"><option value="">自动/默认</option></select>
+              </label>
+            </div>
+            <div class="row checks">
+              <label><input type="checkbox" id="opt-install" checked> 安装 APK</label>
+              <label><input type="checkbox" id="opt-jadx" checked> JADX 源码</label>
+              <label><input type="checkbox" id="opt-cleanup" checked> 自动清理</label>
+              <label><input type="checkbox" id="opt-keep"> 保留设备文件</label>
+              <label><input type="checkbox" id="opt-bypass" checked> 自动模拟器绕过</label>
+              <label title="直接使用 ARM64 redroid 运行，速度很慢"><input type="checkbox" id="opt-arm"> 使用ARM模拟器（速度慢）</label>
+            </div>
+            <p id="arm-note" class="muted small">ARM 可用性：加载中…</p>
+            <details id="advanced-options" class="advanced-options">
+              <summary>高级任务选项</summary>
+              <div class="row adv-options">
+                <label>冻结超时 ms<input id="opt-freeze-timeout" type="number" min="0" step="500" placeholder="默认"></label>
+                <label>内存区域上限<input id="opt-dump-region-max" type="number" min="0" step="1" placeholder="默认"></label>
+                <label>JADX 超时 s<input id="opt-jadx-timeout" type="number" min="0" step="10" placeholder="默认 3600（可由服务器配置）"></label>
+                <label>总超时 s<input id="opt-timeout" type="number" min="0" step="10" placeholder="自动：3600 + JADX 时限"></label>
+                <label class="admin-only-option">Frida Server 路径<input id="opt-frida-server-path" placeholder="/data/local/tmp/frida-server"></label>
+                <label class="check"><input type="checkbox" id="opt-force-dump"> 强制 DEX dump</label>
+                <label class="check"><input type="checkbox" id="opt-inner-bypass"> 内层 SO 绕过</label>
+                <label class="check"><input type="checkbox" id="opt-prune-raw"> 清理原始 dump</label>
+              </div>
+            </details>
+            <button id="start-job" class="primary" disabled>上传并开始脱壳</button>
+            <p class="muted small">上传完成后自动创建任务；任务进度通过 SSE 实时推送。</p>
+          </div>
+
+          <div class="card jobs-card">
+            <div class="jobs-body">
+              <div class="card-head">
+                <div>
+                  <h2>任务列表</h2>
+                  <p id="jobs-summary" class="muted small">加载中…</p>
+                </div>
+                <div class="row job-tools">
+                  <select id="job-status-filter" title="按状态筛选">
+                    <option value="">全部状态</option>
+                    <option value="queued">排队中</option>
+                    <option value="running">运行中</option>
+                    <option value="succeeded">成功</option>
+                    <option value="partial">部分成功</option>
+                    <option value="failed">失败</option>
+                    <option value="cancelled">已取消</option>
+                  </select>
+                  <button id="refresh-jobs" class="ghost">刷新</button>
+                </div>
+              </div>
+              <div id="jobs-list" class="job-list">
+                <div class="job-empty muted">暂无任务</div>
+              </div>
+              <div class="list-footer">
+                <span id="jobs-page-info" class="muted small"></span>
+                <div class="row">
+                  <button id="jobs-prev" class="ghost small" disabled>上一页</button>
+                  <button id="jobs-next" class="ghost small" disabled>下一页</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <section id="job-detail" class="card detail hidden">
+          <div class="card-head">
+            <h2 id="detail-title">任务详情</h2>
+            <div class="row">
+              <button id="detail-cancel" class="ghost danger">取消</button>
+              <button id="detail-cleanup" class="ghost">清理设备</button>
+              <button id="detail-retry" class="ghost">重试</button>
+              <button id="detail-close" class="ghost">关闭</button>
+            </div>
+          </div>
+          <div id="detail-meta" class="meta-grid"></div>
+          <div id="engine-config" class="meta-grid"></div>
+          <div class="downloads" id="downloads"></div>
+          <h3>调用记录 <span class="muted small">工具 / Skill / Agent / MCP</span></h3>
+          <div class="row call-filters">
+            <label><input type="checkbox" class="call-filter" value="tool" checked> 工具</label>
+            <label><input type="checkbox" class="call-filter" value="mcp" checked> MCP</label>
+            <label><input type="checkbox" class="call-filter" value="skill" checked> Skill</label>
+            <label><input type="checkbox" class="call-filter" value="lesson" checked> 经验</label>
+            <label><input type="checkbox" class="call-filter" value="agent" checked> Agent</label>
+          </div>
+          <div id="calls" class="events calls"></div>
+          <h3>实时事件 <span id="stream-state" class="muted small"></span></h3>
+          <div id="events" class="events"></div>
+        </section>
+      </section>
+
+      <section id="tab-chat" class="tab-panel hidden">
+        <div class="chat-grid">
+          <aside id="chat-sidebar" class="card chat-sidebar">
+            <div class="card-head">
+              <h2>聊天</h2>
+              <button id="chat-new" class="primary">新聊天</button>
+            </div>
+            <label class="chat-agent-pick">Agent / 模型
+              <select id="chat-agent"></select>
+            </label>
+            <p id="chat-agent-info" class="muted small">加载中…</p>
+            <div id="chat-sessions" class="chat-session-list">
+              <div class="muted">暂无聊天</div>
+            </div>
+          </aside>
+          <section class="card chat-panel">
+            <div class="card-head">
+              <div>
+                <h2 id="chat-title">新聊天</h2>
+                <p id="chat-meta" class="muted small">选择 Agent 后开始对话</p>
+              </div>
+              <div class="row">
+                <button id="chat-sidebar-toggle" class="ghost chat-sidebar-toggle" type="button" aria-controls="chat-sidebar" aria-expanded="false">聊天列表</button>
+                <button id="chat-rename" class="ghost">重命名</button>
+                <button id="chat-clear" class="ghost">清空</button>
+                <button id="chat-delete" class="ghost danger">删除</button>
+              </div>
+            </div>
+            <div id="chat-messages" class="chat-messages" role="log" aria-live="polite">
+              <div class="chat-empty muted">新建聊天并发送第一条消息</div>
+            </div>
+            <form id="chat-form" class="chat-composer">
+              <div class="chat-attach-bar">
+                <button type="button" id="chat-attach" class="ghost">附件</button>
+                <input id="chat-files" type="file" multiple hidden>
+                <span id="chat-pending-files" class="chat-pending-files"></span>
+              </div>
+              <textarea id="chat-input" rows="3" placeholder="输入消息…（Enter 发送，Shift+Enter 换行）"></textarea>
+              <div class="chat-compose-row">
+                <span id="chat-state" class="muted small"></span>
+                <div class="chat-compose-actions">
+                  <button id="chat-stop" class="ghost danger hidden" type="button">停止</button>
+                  <button id="chat-send" class="primary" type="submit" disabled>发送</button>
+                </div>
+              </div>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <section id="tab-lessons" class="tab-panel hidden">
+        <div class="card">
+          <div class="card-head">
+            <h2>经验库 <span class="muted small">任务完成自动生成 / 自动保存</span></h2>
+            <div class="row">
+              <input id="lesson-query" placeholder="搜索症状/方案/壳/方法">
+              <select id="lesson-kind">
+                <option value="">全部</option>
+                <option value="auto">自动</option>
+                <option value="manual">手工</option>
+              </select>
+              <button id="lesson-search" class="ghost">搜索</button>
+              <button id="lesson-refresh" class="ghost">刷新</button>
+              <button id="lesson-download" class="ghost">下载经验库</button>
+              <button id="lesson-import" class="ghost lesson-admin">导入经验库</button>
+              <input id="lesson-import-file" type="file" accept=".json,application/json" hidden>
+            </div>
+          </div>
+          <div class="row lesson-admin hidden">
+            <label class="check"><input type="checkbox" id="lesson-select-all"> 全选</label>
+            <span id="lesson-selected-count" class="muted small"></span>
+            <button id="lesson-delete-selected" class="ghost danger" type="button" disabled>删除所选</button>
+          </div>
+          <p class="muted small">每个任务结束（成功/失败/静态/动态）都会自动生成一条经验；只有经过验证的成功才会增加成功计数，部分成功会记录为风险/警告，不作为成功路线参与排序。</p>
+          <p class="muted small">经验库可以下载后分享；导入采用非覆盖模式，只添加新经验，不修改已有经验。导入、新增、编辑与删除仅限管理员；未验证的导入经验不参与主路线/回退排序。</p>
+          <div id="lesson-stats" class="stats-row"></div>
+          <div id="lessons-list" class="lessons"></div>
+        </div>
+        <div class="card lesson-admin">
+          <h2>记录新经验</h2>
+          <div class="row">
+            <input id="lesson-title" placeholder="标题">
+            <input id="lesson-shell" placeholder="壳（可选）">
+            <input id="lesson-abi" placeholder="设备 ABI（可选）">
+          </div>
+          <textarea id="lesson-scenario" placeholder="场景/症状"></textarea>
+          <textarea id="lesson-solution" placeholder="实际解法"></textarea>
+          <button id="lesson-add" class="primary">保存经验</button>
+        </div>
+        <div id="lesson-edit-card" class="card hidden">
+          <h2>编辑经验 <span id="lesson-edit-id" class="muted small"></span></h2>
+          <div class="row">
+            <input id="le-title" placeholder="标题">
+            <input id="le-shell" placeholder="壳（可选）">
+            <input id="le-abi" placeholder="设备 ABI（可选）">
+            <input id="le-framework" placeholder="框架（可选）">
+          </div>
+          <div class="row">
+            <input id="le-tags" placeholder="标签（逗号分隔）">
+          </div>
+          <textarea id="le-scenario" placeholder="场景/症状"></textarea>
+          <textarea id="le-root-cause" placeholder="根因（可选）"></textarea>
+          <textarea id="le-solution" placeholder="实际解法"></textarea>
+          <div class="row">
+            <button id="lesson-edit-save" class="primary" type="button">保存修改</button>
+            <button id="lesson-edit-cancel" class="ghost" type="button">取消</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-account" class="tab-panel hidden">
+        <div class="account-grid">
+          <div class="card">
+            <h2>我的账号</h2>
+            <div class="account-summary">
+              <div><span class="muted small">用户名</span><b id="account-name">-</b></div>
+              <div><span class="muted small">角色</span><span id="account-role" class="badge">-</span></div>
+            </div>
+            <p class="muted small">管理员可以在「管理 → 用户」创建账号、调整角色、重置密码或删除账号；系统始终至少保留一个可用管理员。</p>
+          </div>
+          <div class="card">
+            <h2>修改密码</h2>
+            <form id="password-form" class="form-stack">
+              <label>当前密码<input id="pw-current" type="password" autocomplete="current-password" required></label>
+              <label>新密码<input id="pw-new" type="password" autocomplete="new-password" minlength="4" required></label>
+              <label>确认新密码<input id="pw-confirm" type="password" autocomplete="new-password" minlength="4" required></label>
+              <button class="primary" type="submit">更新密码</button>
+              <p id="pw-msg" class="muted small"></p>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-admin" class="tab-panel hidden">
+        <div class="admin-head">
+          <div>
+            <h1 id="admin-title">管理后台</h1>
+            <p id="admin-desc" class="muted">账号权限、模型协议、Agent / Skill / MCP 工具链与运行环境</p>
+          </div>
+          <div class="row">
+            <button id="refresh-admin" class="ghost">刷新全部</button>
+          </div>
+        </div>
+
+        <div class="admin-subnav" role="tablist">
+          <button class="admin-tab active" data-admin-pane="overview">概览</button>
+          <button class="admin-tab" data-admin-pane="storage">存储</button>
+          <button class="admin-tab" data-admin-pane="users">用户</button>
+          <button class="admin-tab" data-admin-pane="models">模型接入</button>
+          <button class="admin-tab" data-admin-pane="agents">Agents</button>
+          <button class="admin-tab" data-admin-pane="skills">Skills</button>
+          <button class="admin-tab" data-admin-pane="mcp">MCP</button>
+          <button class="admin-tab" data-admin-pane="system">设备与底座</button>
+          <button class="admin-tab" data-admin-pane="audit">审计</button>
+        </div>
+
+        <div class="admin-pane" data-admin-pane="overview">
+          <div id="stats-grid" class="stat-grid">
+            <div class="stat-card"><span class="muted small">加载中…</span></div>
+          </div>
+          <div class="grid">
+            <div class="card">
+              <div class="card-head"><h2>快速开始</h2><button id="overview-refresh" class="ghost">刷新</button></div>
+              <p class="muted small">模型接入支持任意 Base URL + API Key，协议可选 OpenAI、Anthropic 或自动兼容；同一 URL/Key 可被任一 Agent 底座使用。</p>
+              <div class="quick-links">
+                <button class="ghost" data-admin-jump="models">配置模型</button>
+                <button class="ghost" data-admin-jump="users">管理账号</button>
+                <button class="ghost" data-admin-jump="system">检查设备</button>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>运行底座</h2><button id="refresh-engines" class="ghost">刷新</button></div>
+              <div id="engines-list" class="lessons"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="admin-pane hidden" data-admin-pane="storage">
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>存储与清理</h2>
+                <p class="muted small">清理任务产物、运行目录与不再被任务引用的上传 APK。删除不可恢复。</p>
+              </div>
+              <button id="refresh-storage" class="ghost">刷新</button>
+            </div>
+            <div id="storage-stats" class="stat-grid">
+              <div class="stat-card"><span class="muted small">加载中…</span></div>
+            </div>
+            <div class="row storage-actions">
+              <label>范围
+                <select id="storage-days">
+                  <option value="0">全部符合条件的记录</option>
+                  <option value="7">仅 7 天前</option>
+                  <option value="30">仅 30 天前</option>
+                  <option value="90">仅 90 天前</option>
+                </select>
+              </label>
+              <button id="cleanup-completed-jobs" class="ghost danger">清理已结束任务</button>
+              <button id="cleanup-orphan-uploads" class="ghost">清理无引用上传</button>
+              <button id="cleanup-orphan-runs" class="ghost">清理孤立运行目录</button>
+              <button id="cleanup-all" class="primary">一键清理</button>
+            </div>
+            <p id="storage-note" class="muted small">“已结束任务”包含成功、部分成功、失败、已取消；运行中的任务不会被删除。</p>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2>上传文件</h2>
+                <p id="uploads-summary" class="muted small">加载中…</p>
+              </div>
+            </div>
+            <div id="storage-uploads" class="upload-list">
+              <div class="job-empty muted">加载中…</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="admin-pane hidden" data-admin-pane="users">
+          <div class="card">
+            <div class="card-head">
+              <h2>用户与权限</h2>
+              <div class="row">
+                <span id="user-admin-count" class="muted small"></span>
+                <button id="refresh-users" class="ghost">刷新</button>
+              </div>
+            </div>
+            <p class="muted small">必须始终保留至少一个可用管理员；删除、降级或禁用最后一个管理员会被拒绝。重置密码或禁用账号会使该账号的会话立即失效。</p>
+            <div class="row user-create">
+              <input id="new-user" placeholder="新用户名">
+              <input id="new-pass" type="password" placeholder="初始密码（至少 4 位）">
+              <select id="new-role"><option value="user">user</option><option value="admin">admin</option></select>
+              <button id="add-user" class="primary">创建用户</button>
+            </div>
+            <div id="users-list" class="table-wrap"></div>
+          </div>
+        </div>
+
+        <div class="admin-pane hidden" data-admin-pane="models">
+          <div class="card">
+            <div class="card-head">
+              <h2>模型接入</h2>
+              <div class="row">
+                <button id="new-provider" class="ghost">新增模型</button>
+                <button id="refresh-providers" class="ghost">刷新</button>
+              </div>
+            </div>
+            <p class="muted small">支持 OpenAI（/chat/completions）、Anthropic（/v1/messages）以及自动兼容。Base URL / 模型 / 上下文 / 输出 tokens 均可配置，任意 URL 与 Key 可用于任一 Agent 底座。API Key 只写入服务器 data/secrets（0600），接口只返回掩码，不进入数据库、日志或事件。</p>
+            <div id="provider-presets" class="row presets"></div>
+            <div id="providers-list" class="lessons"></div>
+          </div>
+          <div class="card hidden" id="provider-form-card">
+            <div class="card-head">
+              <h2 id="provider-form-title">模型配置</h2>
+              <button id="provider-form-close" class="ghost">关闭</button>
+            </div>
+            <div class="row">
+              <label>名称<input id="pv-name" placeholder="DeepSeek · OpenAI 协议"></label>
+              <label>协议
+                <select id="pv-protocol">
+                  <option value="auto">自动兼容（OpenAI / Anthropic）</option>
+                  <option value="openai">OpenAI 协议</option>
+                  <option value="anthropic">Anthropic 协议</option>
+                </select>
+              </label>
+              <label class="grow">Base URL<input id="pv-base-url" placeholder="https://api.deepseek.com"></label>
+              <label>模型<input id="pv-model" list="pv-model-list" placeholder="deepseek-chat"></label>
+              <datalist id="pv-model-list"></datalist>
+            </div>
+            <div class="row">
+              <label>API Key<input id="pv-api-key" type="password" autocomplete="new-password" placeholder="留空保持不变"></label>
+              <label>上下文窗口<input id="pv-context" type="number" min="1024" step="1024" value="65536"></label>
+              <label>最大输出 tokens<input id="pv-max-tokens" type="number" min="1" step="256" value="8192"></label>
+              <label>最大步数<input id="pv-steps" type="number" min="1" value="24"></label>
+              <label>超时秒<input id="pv-timeout" type="number" min="5" value="180"></label>
+              <label>温度<input id="pv-temperature" type="number" min="0" max="2" step="0.1" value="0.1"></label>
+              <label class="check"><input id="pv-enabled" type="checkbox" checked> 启用</label>
+            </div>
+            <input id="pv-id" type="hidden">
+            <div class="row">
+              <button id="pv-save" class="primary">保存</button>
+              <button id="pv-test" class="ghost">测试连接</button>
+              <button id="pv-models" class="ghost">拉取模型</button>
+              <button id="pv-clear-key" class="ghost danger">清空 Key</button>
+              <span id="pv-key-state" class="muted small"></span>
+            </div>
+            <pre id="pv-output" class="pre hidden"></pre>
+          </div>
+        </div>
+
+        <div class="admin-pane hidden" data-admin-pane="agents">
+          <div class="card">
+            <div class="card-head">
+              <h2>Agents</h2>
+              <div class="row">
+                <button id="new-agent" class="ghost">新增 Agent</button>
+                <button class="ghost" data-package-import="agents">导入 ZIP</button>
+                <input type="file" accept=".zip,application/zip" hidden data-package-file="agents">
+                <button id="refresh-agents" class="ghost">刷新</button>
+              </div>
+            </div>
+            <p class="muted small">每个 Agent 绑定一个 Provider，可选择 Skill 与 MCP。Provider 的协议决定该 Agent 使用 OpenAI、Anthropic 或自动兼容；确定性 Agent 固定使用内置脱壳工作流。也可上传 ZIP 包自动分析安装 Agent（包内可同时带 Skill / MCP）。</p>
+            <div id="agents-list" class="lessons"></div>
+          </div>
+          <div class="card hidden" id="agent-form-card">
+            <div class="card-head">
+              <h2 id="agent-form-title">Agent 配置</h2>
+              <button id="agent-form-close" class="ghost">关闭</button>
+            </div>
+            <div class="row">
+              <label>名称<input id="ag-name" placeholder="我的脱壳 Agent"></label>
+              <label>模型 Provider<select id="ag-provider"></select></label>
+              <label class="check"><input id="ag-enabled" type="checkbox" checked> 启用</label>
+            </div>
+            <div class="row">
+              <label class="grow">Skills（可多选）
+                <select id="ag-skills" multiple size="6"></select>
+              </label>
+              <label class="grow">MCP（可多选）
+                <select id="ag-mcp" multiple size="6"></select>
+              </label>
+            </div>
+            <textarea id="ag-prompt" placeholder="附加系统提示词（可选）"></textarea>
+            <input id="ag-id" type="hidden">
+            <div class="row">
+              <button id="ag-save" class="primary">保存 Agent</button>
+              <button id="ag-cancel" class="ghost">取消</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="admin-pane hidden" data-admin-pane="skills">
+          <div class="card">
+            <div class="card-head">
+              <h2>Skills</h2>
+              <div class="row">
+                <button id="new-skill" class="ghost">新增 Skill</button>
+                <button class="ghost" data-package-import="skills">导入 ZIP</button>
+                <input type="file" accept=".zip,application/zip" hidden data-package-file="skills">
+                <button id="refresh-skills" class="ghost">刷新</button>
+              </div>
+            </div>
+            <p class="muted small">内置 Skill 只读，自定义 Skill 可增删改；Agent 可选择挂载。ZIP 包内包含 SKILL.md（或 skills/*/SKILL.md）即可自动安装。</p>
+            <div id="skills-list" class="lessons"></div>
+          </div>
+          <div class="card hidden" id="skill-form-card">
+            <div class="card-head">
+              <h2 id="skill-form-title">Skill</h2>
+              <button id="skill-form-close" class="ghost">关闭</button>
+            </div>
+            <div class="row">
+              <label>名称<input id="sk-name"></label>
+              <label class="grow">描述<input id="sk-desc"></label>
+              <label class="check"><input id="sk-enabled" type="checkbox" checked> 启用</label>
+            </div>
+            <textarea id="sk-content" class="tall" placeholder="Markdown skill 内容"></textarea>
+            <input id="sk-id" type="hidden">
+            <div class="row">
+              <button id="sk-save" class="primary">保存 Skill</button>
+              <button id="sk-cancel" class="ghost">取消</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="admin-pane hidden" data-admin-pane="mcp">
+          <div class="card">
+            <div class="card-head">
+              <h2>MCP 服务器</h2>
+              <div class="row">
+                <button id="new-mcp" class="ghost">新增 MCP</button>
+                <button class="ghost" data-package-import="mcps">导入 ZIP</button>
+                <input type="file" accept=".zip,application/zip" hidden data-package-file="mcps">
+                <button id="refresh-mcp" class="ghost">刷新</button>
+              </div>
+            </div>
+            <p class="muted small">支持 HTTP JSON-RPC 与 stdio（命令在服务器执行，仅管理员可配置）。Headers/Env 存在 0600 密钥文件。ZIP 包内包含 mcp/*.json、.mcp.json 或 manifest.json 即可自动安装。</p>
+            <div id="mcp-list" class="lessons"></div>
+          </div>
+          <div class="card hidden" id="mcp-form-card">
+            <div class="card-head">
+              <h2 id="mcp-form-title">MCP Server</h2>
+              <button id="mcp-form-close" class="ghost">关闭</button>
+            </div>
+            <div class="row">
+              <label>名称<input id="mc-name" placeholder="filesystem"></label>
+              <label>传输
+                <select id="mc-transport">
+                  <option value="http">HTTP JSON-RPC</option>
+                  <option value="stdio">stdio</option>
+                </select>
+              </label>
+              <label class="grow">URL<input id="mc-url" placeholder="https://example.com/mcp"></label>
+              <label class="grow">命令<input id="mc-command" placeholder="npx -y @modelcontextprotocol/server-filesystem /data"></label>
+              <label class="check"><input id="mc-enabled" type="checkbox" checked> 启用</label>
+            </div>
+            <div class="row">
+              <label class="grow">Headers JSON<textarea id="mc-headers" class="small-area" placeholder='{"Authorization":"Bearer ..."}（留空保持不变）'></textarea></label>
+              <label class="grow">Env JSON<textarea id="mc-env" class="small-area" placeholder='{"TOKEN":"..."}（留空保持不变）'></textarea></label>
+              <label class="check"><input id="mc-clear-secrets" type="checkbox"> 清空 Headers/Env</label>
+            </div>
+            <input id="mc-id" type="hidden">
+            <div class="row">
+              <button id="mc-save" class="primary">保存 MCP</button>
+              <button id="mc-test" class="ghost">测试并列出工具</button>
+              <button id="mc-cancel" class="ghost">取消</button>
+            </div>
+            <pre id="mc-output" class="pre hidden"></pre>
+          </div>
+        </div>
+
+        <div class="admin-pane hidden" data-admin-pane="system">
+          <div class="grid">
+            <div class="card">
+              <div class="card-head"><h2>设备</h2><button id="refresh-devices" class="ghost">刷新</button></div>
+              <div class="row device-create">
+                <label class="grow">Serial<input id="device-serial" placeholder="留空自动扫描；也可填 127.0.0.1（自动补 5555）"></label>
+                <label>名称<input id="device-name" placeholder="留空自动命名"></label>
+                <label>类型
+                  <select id="device-kind">
+                    <option value="auto">自动</option>
+                    <option value="redroid">redroid</option>
+                    <option value="emulator">emulator</option>
+                    <option value="usb">USB</option>
+                    <option value="network">网络</option>
+                  </select>
+                </label>
+                <label class="check"><input id="device-connect" type="checkbox"> 添加后连接</label>
+                <button id="device-add" class="primary">添加设备</button>
+              </div>
+              <p class="muted small">无需填写即可添加：留空 Serial 会扫描并登记全部已连接设备；名称留空自动生成，裸 IP 自动补 5555 端口。删除仅从列表隐藏，不会断开 adb。</p>
+              <div id="devices-list" class="lessons"></div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>运行底座</h2><button id="refresh-engines-system" class="ghost">刷新</button></div>
+              <div id="engines-list-system" class="lessons"></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>Doctor</h2><button id="run-doctor" class="ghost">运行</button></div>
+            <pre id="doctor-output" class="pre">点击运行检查环境</pre>
+          </div>
+        </div>
+
+        <div class="admin-pane hidden" data-admin-pane="audit">
+          <div class="card">
+            <div class="card-head"><h2>审计日志</h2><button id="refresh-audit" class="ghost">刷新</button></div>
+            <div id="audit-list" class="events"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/i18n.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

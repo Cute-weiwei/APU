@@ -1,0 +1,97 @@
+--- a/linux-user/syscall.c
++++ b/linux-user/syscall.c
+@@ -8899,6 +8899,47 @@
+ #endif /* TARGET_NR_getdents */
+ 
+ #if defined(TARGET_NR_getdents64) && defined(__NR_getdents64)
++/* Present only guest CPU threads in the guest's own task directory.
++ * Zygote waits for guest threads to stop before fork; QEMU's RCU worker is
++ * not a guest thread and must not keep that wait alive forever. */
++static bool apu_guest_task_dir(int fd)
++{
++    char fdpath[64], expected[64], resolved[PATH_MAX];
++    ssize_t n;
++    if (access("/apu-binder-compat", F_OK) != 0) {
++        return false;
++    }
++    snprintf(fdpath, sizeof(fdpath), "/proc/self/fd/%d", fd);
++    snprintf(expected, sizeof(expected), "/proc/%ld/task", (long)getpid());
++    n = readlink(fdpath, resolved, sizeof(resolved) - 1);
++    if (n < 0) {
++        return false;
++    }
++    resolved[n] = 0;
++    return strcmp(resolved, expected) == 0;
++}
++
++static bool apu_guest_task_entry(const char *name)
++{
++    char *end;
++    long tid = strtol(name, &end, 10);
++    CPUState *cpu;
++    bool found = false;
++    if (tid <= 0 || *end) {
++        return true;  /* dot entries and any nonnumeric entries */
++    }
++    rcu_read_lock();
++    CPU_FOREACH(cpu) {
++        TaskState *task = cpu->opaque;
++        if (task && task->ts_tid == tid) {
++            found = true;
++            break;
++        }
++    }
++    rcu_read_unlock();
++    return found;
++}
++
+ static int do_getdents64(abi_long dirfd, abi_long arg2, abi_long count)
+ {
+     g_autofree void *hdirp = NULL;
+@@ -8906,12 +8947,14 @@
+     int hlen, hoff, toff;
+     int hreclen, treclen;
+     off64_t prev_diroff = 0;
++    bool guest_tasks = apu_guest_task_dir(dirfd);
+ 
+     hdirp = g_try_malloc(count);
+     if (!hdirp) {
+         return -TARGET_ENOMEM;
+     }
+ 
++again:
+     hlen = get_errno(sys_getdents64(dirfd, hdirp, count));
+     if (is_error(hlen)) {
+         return hlen;
+@@ -8922,13 +8965,16 @@
+         return -TARGET_EFAULT;
+     }
+ 
+-    for (hoff = toff = 0; hoff < hlen; hoff += hreclen, toff += treclen) {
++    for (hoff = toff = 0; hoff < hlen; hoff += hreclen) {
+         struct linux_dirent64 *hde = hdirp + hoff;
+         struct target_dirent64 *tde = tdirp + toff;
+         int namelen;
+ 
+         namelen = strlen(hde->d_name) + 1;
+         hreclen = hde->d_reclen;
++        if (guest_tasks && !apu_guest_task_entry(hde->d_name)) {
++            continue;
++        }
+         treclen = offsetof(struct target_dirent64, d_name) + namelen;
+         treclen = QEMU_ALIGN_UP(treclen, __alignof(struct target_dirent64));
+ 
+@@ -8957,9 +9003,13 @@
+         tde->d_reclen = tswap16(treclen);
+         tde->d_type = hde->d_type;
+         memcpy(tde->d_name, hde->d_name, namelen);
++        toff += treclen;
+     }
+ 
+     unlock_user(tdirp, arg2, toff);
++    if (guest_tasks && hlen > 0 && toff == 0) {
++        goto again;
++    }
+     return toff;
+ }
+ #endif /* TARGET_NR_getdents64 */

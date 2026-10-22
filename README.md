@@ -14,6 +14,8 @@
 
 > 一个知道如何选择脱壳路线、能保留证据、会记录失败经验，并且可以被 Agent 调用的 APK 分析底座。
 
+本项目的 README 组织方式参考了 [REA](https://github.com/morluto/rea) 的“先讲问题与结果，再讲工作方式和工具边界”的宣传风格；项目代码、命名和文案均为本项目自己的实现。
+
 > **使用边界**：只分析你拥有或明确获准测试的 APK、设备和运行环境。工具不会赋予你绕过授权、窃取数据或攻击第三方应用的权利。详见 [DISCLAIMER.md](DISCLAIMER.md)。
 
 ## 为什么需要它
@@ -284,7 +286,7 @@ Frida server、adb forward、库名临时改动、冻结进程等设备变化会
 - JADX 的源码完整度会受到壳、混淆、损坏 DEX、内存和超时影响；部分成功会保留已恢复产物，并标记质量限制；
 - redroid / native bridge 对部分 ARM-only 壳存在环境限制，实验性 shield 不能保证绕过所有新版本保护；
 - “识别到壳”不等于“已经恢复全部业务代码”，“DEX 校验通过”也不等于“每个类都成功反编译”；
-- 本仓库当前没有提交正式 `LICENSE` 文件。公开发布前，请补充你确认的许可证、第三方工具条款和发行说明。
+- 项目代码采用 MIT License；Frida、JADX、redroid、QEMU 等外部工具及第三方材料仍受各自许可证和使用条款约束。
 
 详细限制和待补样本见 [`docs/functional-gaps.md`](docs/functional-gaps.md)；完整安装说明见 [`docs/installation.md`](docs/installation.md)。
 

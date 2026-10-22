@@ -1,0 +1,213 @@
+--- a/linux-user/syscall.c
++++ b/linux-user/syscall.c
+@@ -5571,6 +5571,145 @@
+ 
+ /* ??? Implement proper locking for ioctls.  */
+ /* do_ioctl() Must return target values and target errnos. */
++
++static uint64_t apu_untag_ptr(uint64_t addr)
++{
++    /* ARM64 TBI: strip the top byte for user addresses (bit 55 clear). */
++    if (!(addr & (1ULL << 55))) {
++        addr &= 0x00ffffffffffffffULL;
++    }
++    return addr;
++}
++
++static void apu_untag_binder_write_buf(unsigned char *buf, uint64_t size)
++{
++    uint64_t off = 0;
++    while (off + 4 <= size) {
++        uint32_t cmd;
++        uint64_t payload = 0;
++        uint64_t ptr_off[2] = { UINT64_MAX, UINT64_MAX };
++        uint32_t nr;
++        memcpy(&cmd, buf + off, 4);
++        off += 4;
++        if ((cmd & 0xff00) != 0x6300) {
++            return;
++        }
++        nr = cmd & 0xff;
++        switch (nr) {
++        case 0:  /* BC_TRANSACTION */
++        case 1:  /* BC_REPLY */
++            payload = 64;
++            ptr_off[0] = 48;  /* data.ptr.buffer */
++            ptr_off[1] = 56;  /* data.ptr.offsets */
++            break;
++        case 2:  /* BC_ACQUIRE_RESULT */
++        case 4: case 5: case 6: case 7:
++            payload = 4;
++            break;
++        case 3:  /* BC_FREE_BUFFER: kernel dereferences this address */
++            payload = 8;
++            ptr_off[0] = 0;
++            break;
++        case 16: /* BC_DEAD_BINDER_DONE: opaque cookie */
++            payload = 8;
++            break;
++        case 8:  /* BC_INCREFS_DONE */
++        case 9:  /* BC_ACQUIRE_DONE */
++            payload = 16;  /* binder/cookie are opaque identities */
++            break;
++        case 10: /* BC_ATTEMPT_ACQUIRE */
++            payload = 8;
++            break;
++        case 11: case 12: case 13:
++            payload = 0;
++            break;
++        case 14: /* BC_REQUEST_DEATH_NOTIFICATION */
++        case 15: /* BC_CLEAR_DEATH_NOTIFICATION */
++            payload = 12;  /* packed binder_handle_cookie; opaque cookie */
++            break;
++        case 17: /* BC_TRANSACTION_SG */
++        case 18: /* BC_REPLY_SG */
++            payload = 72;
++            ptr_off[0] = 48;
++            ptr_off[1] = 56;
++            break;
++        default:
++            return;
++        }
++        if (off + payload > size) {
++            return;
++        }
++        for (int i = 0; i < 2; i++) {
++            if (ptr_off[i] != UINT64_MAX) {
++                uint64_t value;
++                memcpy(&value, buf + off + ptr_off[i], 8);
++                value = apu_untag_ptr(value);
++                memcpy(buf + off + ptr_off[i], &value, 8);
++            }
++        }
++        off += payload;
++    }
++}
++
++static abi_long do_binder_write_read(int fd, abi_long arg)
++{
++    struct {
++        uint64_t write_size;
++        uint64_t write_consumed;
++        uint64_t write_buffer;
++        uint64_t read_size;
++        uint64_t read_consumed;
++        uint64_t read_buffer;
++    } bwr;
++    unsigned char *write_buf = NULL;
++    unsigned char *read_buf = NULL;
++
++    void *guest = lock_user(VERIFY_READ, arg, sizeof(bwr), 1);
++    if (!guest) {
++        return -TARGET_EFAULT;
++    }
++    memcpy(&bwr, guest, sizeof(bwr));
++    unlock_user(guest, arg, 0);
++
++    uint64_t guest_write = apu_untag_ptr(bwr.write_buffer);
++    uint64_t guest_read = apu_untag_ptr(bwr.read_buffer);
++    if (bwr.write_size) {
++        void *wb = lock_user(VERIFY_READ, guest_write, bwr.write_size, 1);
++        if (!wb) {
++            return -TARGET_EFAULT;
++        }
++        write_buf = g_malloc(bwr.write_size);
++        memcpy(write_buf, wb, bwr.write_size);
++        unlock_user(wb, guest_write, 0);
++        apu_untag_binder_write_buf(write_buf, bwr.write_size);
++        bwr.write_buffer = (uint64_t)(uintptr_t)write_buf;
++    }
++    if (bwr.read_size) {
++        read_buf = g_malloc0(bwr.read_size);
++        bwr.read_buffer = (uint64_t)(uintptr_t)read_buf;
++    }
++
++    abi_long ret = get_errno(ioctl(fd, 0xc0306201, &bwr));
++
++    if (!is_error(ret) && read_buf && bwr.read_consumed) {
++        uint64_t n = bwr.read_consumed < bwr.read_size ? bwr.read_consumed : bwr.read_size;
++        void *rb = lock_user(VERIFY_WRITE, guest_read, n, 0);
++        if (rb) {
++            memcpy(rb, read_buf, n);
++            unlock_user(rb, guest_read, n);
++        }
++    }
++    void *out = lock_user(VERIFY_WRITE, arg, sizeof(bwr), 0);
++    if (out) {
++        memcpy((char *)out + 8, &bwr.write_consumed, 8);
++        memcpy((char *)out + 32, &bwr.read_consumed, 8);
++        unlock_user(out, arg, sizeof(bwr));
++    }
++    g_free(write_buf);
++    g_free(read_buf);
++    return ret;
++}
++
+ static abi_long do_ioctl(int fd, int cmd, abi_long arg)
+ {
+     const IOCTLEntry *ie;
+@@ -5583,9 +5722,16 @@
+     ie = ioctl_entries;
+     for(;;) {
+         if (ie->target_cmd == 0) {
+-            qemu_log_mask(
+-                LOG_UNIMP, "Unsupported ioctl: cmd=0x%04lx\n", (long)cmd);
+-            return -TARGET_ENOTTY;
++            /*
++             * Android Binder and several device drivers use ioctls that QEMU
++             * does not enumerate. Binder buffers carry ARM64 top-byte tags,
++             * so sanitize pointers and use a host-side bounce buffer for
++             * BINDER_WRITE_READ. Other unknown ioctls are passed through.
++             */
++            if (cmd == 0xc0306201) {
++                return do_binder_write_read(fd, arg);
++            }
++            return get_errno(ioctl(fd, cmd, apu_untag_ptr(arg)));
+         }
+         if (ie->target_cmd == cmd)
+             break;
+@@ -6481,6 +6627,19 @@
+         /* Disable to prevent the target disabling stuff we need. */
+         return -TARGET_EINVAL;
+ 
++#ifdef PR_SET_VMA
++    case PR_SET_VMA:
++        {
++            void *vma_name = lock_user_string(arg5);
++            if (!vma_name) {
++                return -TARGET_EFAULT;
++            }
++            ret = get_errno(prctl(PR_SET_VMA, arg2, arg3, arg4, vma_name));
++            unlock_user(vma_name, arg5, 0);
++            return ret;
++        }
++#endif
++
+     default:
+         qemu_log_mask(LOG_UNIMP, "Unsupported prctl: " TARGET_ABI_FMT_ld "\n",
+                       option);
+@@ -6561,7 +6720,13 @@
+         new_thread_info info;
+         pthread_attr_t attr;
+ 
+-        if (((flags & CLONE_THREAD_FLAGS) != CLONE_THREAD_FLAGS) ||
++        /*
++         * Android bionic issues raw clone() calls for threads that omit
++         * CLONE_FS/CLONE_FILES/CLONE_SYSVSEM. Linux only requires
++         * CLONE_VM|CLONE_SIGHAND|CLONE_THREAD, so do not reject the subset.
++         */
++        if (((flags & (CLONE_VM | CLONE_SIGHAND | CLONE_THREAD)) !=
++             (CLONE_VM | CLONE_SIGHAND | CLONE_THREAD)) ||
+             (flags & CLONE_INVALID_THREAD_FLAGS)) {
+             return -TARGET_EINVAL;
+         }
+--- a/linux-user/aarch64/target_elf.h
++++ b/linux-user/aarch64/target_elf.h
+@@ -9,6 +9,6 @@
+ #define AARCH64_TARGET_ELF_H
+ static inline const char *cpu_get_model(uint32_t eflags)
+ {
+-    return "any";
++    return "cortex-a76";
+ }
+ #endif

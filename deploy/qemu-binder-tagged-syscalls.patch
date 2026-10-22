@@ -1,0 +1,19 @@
+--- a/linux-user/aarch64/target_prctl.h
++++ b/linux-user/aarch64/target_prctl.h
+@@ -194,6 +194,16 @@
+     if (arg2 & ~valid_mask) {
+         return -TARGET_EINVAL;
+     }
++    /* Android Binder passthrough reaches the host kernel, including nested
++     * scatter-gather buffers. An x86 host cannot dereference ARM64 TBI tags.
++     * This opt-in container profile must not advertise tagged syscall support;
++     * bionic can then choose its supported untagged allocation path.
++     * Other QEMU users retain the upstream behavior.
++     */
++    if ((arg2 & PR_TAGGED_ADDR_ENABLE) &&
++        access("/apu-binder-compat", F_OK) == 0) {
++        return -TARGET_EINVAL;
++    }
+     env->tagged_addr_enable = arg2 & PR_TAGGED_ADDR_ENABLE;
+ 
+     if (cpu_isar_feature(aa64_mte, cpu)) {

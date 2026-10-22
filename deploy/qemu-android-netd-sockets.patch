@@ -1,0 +1,41 @@
+--- a/linux-user/syscall.c
++++ b/linux-user/syscall.c
+@@ -2455,6 +2455,11 @@
+         case TARGET_SO_PRIORITY:
+ 		optname = SO_PRIORITY;
+ 		break;
++#if defined(TARGET_AARCH64) && defined(SO_MARK)
++        case SO_MARK:  /* ARM64 Linux uses the host's integer option 36. */
++                optname = SO_MARK;
++                break;
++#endif
+ #ifdef SO_BSDCOMPAT
+         case TARGET_SO_BSDCOMPAT:
+ 		optname = SO_BSDCOMPAT;
+@@ -2537,6 +2542,26 @@
+         level = SOL_SOCKET;
+         switch (optname) {
+         /* These don't just return a single integer */
++#if defined(TARGET_AARCH64) && defined(SO_COOKIE)
++        case SO_COOKIE: {
++            uint64_t cookie;
++            if (get_user_u32(len, optlen)) {
++                return -TARGET_EFAULT;
++            }
++            if (len < (int)sizeof(cookie)) {
++                return -TARGET_EINVAL;
++            }
++            lv = sizeof(cookie);
++            ret = get_errno(getsockopt(sockfd, SOL_SOCKET, SO_COOKIE, &cookie, &lv));
++            if (ret < 0) {
++                return ret;
++            }
++            if (put_user_u64(cookie, optval_addr) || put_user_u32(lv, optlen)) {
++                return -TARGET_EFAULT;
++            }
++            break;
++        }
++#endif
+         case TARGET_SO_PEERNAME:
+             goto unimplemented;
+         case TARGET_SO_RCVTIMEO: {

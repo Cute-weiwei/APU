@@ -1,0 +1,43 @@
+--- a/linux-user/syscall.c
++++ b/linux-user/syscall.c
+@@ -3125,6 +3125,20 @@
+ }
+ 
+ /* do_socket() Must return target values and target errnos. */
++/* Android netd/wifi use these native-endian protocols. This project only
++ * opts in for an ARM64 guest on an x86_64 host with matching wire layouts. */
++static bool apu_native_android_netlink(int domain, int protocol)
++{
++#if defined(TARGET_AARCH64) && defined(__x86_64__) && !TARGET_BIG_ENDIAN
++    return domain == PF_NETLINK &&
++           (protocol == NETLINK_NFLOG || protocol == NETLINK_XFRM ||
++            protocol == NETLINK_NETFILTER || protocol == NETLINK_GENERIC) &&
++           access("/apu-binder-compat", F_OK) == 0;
++#else
++    return false;
++#endif
++}
++
+ static abi_long do_socket(int domain, int type, int protocol)
+ {
+     int target_type = type;
+@@ -3140,7 +3154,8 @@
+          protocol == NETLINK_ROUTE ||
+ #endif
+          protocol == NETLINK_KOBJECT_UEVENT ||
+-         protocol == NETLINK_AUDIT)) {
++         protocol == NETLINK_AUDIT) &&
++        !apu_native_android_netlink(domain, protocol)) {
+         return -TARGET_EPROTONOSUPPORT;
+     }
+ 
+@@ -3171,7 +3186,8 @@
+                 fd_trans_register(ret, &target_netlink_audit_trans);
+                 break;
+             default:
+-                g_assert_not_reached();
++                g_assert(apu_native_android_netlink(domain, protocol));
++                break;
+             }
+         }
+     }

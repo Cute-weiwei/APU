@@ -1,0 +1,42 @@
+--- a/linux-user/syscall.c
++++ b/linux-user/syscall.c
+@@ -5588,7 +5588,7 @@
+     while (off + 4 <= size) {
+         uint32_t cmd;
+         uint64_t payload = 0;
+-        uint64_t ptr_off[2] = { 0, UINT64_MAX };
++        uint64_t ptr_off[2] = { UINT64_MAX, UINT64_MAX };
+         uint32_t nr;
+         memcpy(&cmd, buf + off, 4);
+         off += 4;
+@@ -5607,15 +5607,16 @@
+         case 4: case 5: case 6: case 7:
+             payload = 4;
+             break;
+-        case 3:  /* BC_FREE_BUFFER */
+-        case 16: /* BC_DEAD_BINDER_DONE */
++        case 3:  /* BC_FREE_BUFFER: kernel dereferences this address */
+             payload = 8;
+             ptr_off[0] = 0;
+             break;
++        case 16: /* BC_DEAD_BINDER_DONE: opaque cookie */
++            payload = 8;
++            break;
+         case 8:  /* BC_INCREFS_DONE */
+         case 9:  /* BC_ACQUIRE_DONE */
+-            payload = 16;
+-            ptr_off[0] = 0;
++            payload = 16;  /* binder/cookie are opaque identities */
+             break;
+         case 10: /* BC_ATTEMPT_ACQUIRE */
+             payload = 8;
+@@ -5625,8 +5626,7 @@
+             break;
+         case 14: /* BC_REQUEST_DEATH_NOTIFICATION */
+         case 15: /* BC_CLEAR_DEATH_NOTIFICATION */
+-            payload = 16;
+-            ptr_off[0] = 8;
++            payload = 12;  /* packed binder_handle_cookie; opaque cookie */
+             break;
+         case 17: /* BC_TRANSACTION_SG */
+         case 18: /* BC_REPLY_SG */
